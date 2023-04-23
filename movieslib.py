@@ -1,7 +1,18 @@
 import shutil
 import os
-import statistics
+import statistics 
+import scipy.stats as stats
+import math
+from itertools import cycle
+import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
+
+
+COLSETS = {'eyes':['AU01_r', 'AU02_r', 'AU04_r'], 'midpart':['AU05_r', 'AU06_r', 'AU07_r', 'AU09_r'],
+    'mouth':['AU12_r', 'AU14_r', 'AU15_r', 'AU17_r', 'AU20_r', 'AU23_r', 'AU25_r', 'AU26_r'], 
+    'all':['AU01_r', 'AU02_r', 'AU04_r', 'AU05_r', 'AU06_r', 'AU07_r', 'AU09_r', 'AU12_r', 'AU14_r', 'AU15_r', 'AU17_r', 'AU20_r', 'AU23_r', 'AU25_r', 'AU26_r']}
 
 #walks through a geven directory and collects all files that contain the word file
 #input: directory_name, file - a word that bust be included in the file name
@@ -21,24 +32,7 @@ def new_folder(fold_path):
 
 
 
-#####################    STATISTICS    ##########################
-
-#calculates mean of one line values
-#input: line: pandas dataframe line; cols:columns of interest
-def line_mean(line, cols):
-    values = list(line[cols])
-    return statistics.mean(values)
-
-#calculates standard deviation of one line values
-#input: line: pandas dataframe line; cols:columns of interest
-def line_SD(line, cols):
-    values = list(line[cols])
-    return statistics.stdev(values)
-
-
-
-
-
+################  CUTS  ########################
 
 
 
@@ -63,14 +57,14 @@ def find_cats(shot):
     for i in range(length):
         temp = shot.iloc[i] 
 
-        if temp['frame'] != current:
+        if temp['frame'] != current: #counting continous sequence of the frames
             output.append([init_frame, shot.iloc[i-1]['frame'], shot.iloc[i-1]['timestamp'] - init_time])
             init_frame = temp['frame']
             current = init_frame
             init_time = temp['timestamp']
         current += 1
 
-    output.append([init_frame, shot.iloc[i-1]['frame'], shot.iloc[i-1]['timestamp'] - init_time])
+    output.append([init_frame, shot.iloc[i]['frame'], shot.iloc[i]['timestamp'] - init_time])
 
     return output
 
@@ -157,103 +151,213 @@ def time_transform(timestamp):
 
 #this function calculates mean and Standard deviation of one frame 
 #input: shot: a dataframe; id: name of the frame (could be either number of a shot or a name of a movie)
-#       facial act: a dictionary in a format: facial_act = {'face_id':[], 'mean_eyes(max)':[], 'SD_eyes(max)':[], 'mean_mouth(max)':[], 'SD_mouth(max)':[], 'mean_AU_r(max)':[], 'SD_AU_r(max)':[],
-                #'mean_eyes(average)':[], 'SD_eyes(average)':[], 'mean_mouth(average)':[], 'SD_mouth(average)':[], 'mean_AU_r(average)':[], 'SD_AU_r(average)':[],
-                 #   'mean_blink':[], 'SD_blink':[]}
-#output: updated facial_act (with one more line added)
+#       facial act: a pandas dataframe with statistics for one shot of a movie
 
-def mean_SD(shot, id, facial_act):
+def mean_SD(shot, movie, id, stat_cols):
 
-    colSets = {'eyes':['AU01_r', 'AU02_r', 'AU04_r', 'AU05_r', 'AU06_r', 'AU07_r', 'AU09_r', 'AU10_r'], 
-    'mouth':['AU12_r', 'AU14_r', 'AU15_r', 'AU17_r', 'AU20_r', 'AU23_r', 'AU25_r', 'AU26_r'], 
-    'blink':['AU45_r']}
+    df_output = pd.DataFrame()
 
-    #blink is excluded
-    eyes = {'max':[], 'mean':[], 'der':[]}
-    mouth = {'max':[], 'mean':[], 'der':[]}
-    AU = {'max':[], 'mean':[], 'der':[]}
-    
-    eyes_prev = max(shot.iloc[0][[colSets['eyes']]])
-    mouth_prev = max(shot.iloc[0][[colSets['mouth']]])
-    AU_prev = max(shot.iloc[0][colSets['eyes'] + colSets['mouth']])
-    time_prev = shot.iloc[0]['timestamp']
+    time = list(shot['timestamp'])
 
-    for i in range(len(shot)):
+    df_output['movie'] = [movie]
+    df_output['face_id'] = [id]
+    df_output['time'] = time[-1] - time[0]
 
-        temp = shot.iloc[i] #locate a current line
+    for col in stat_cols:
+        #mean
+        df_output[col + '_mean'] = [ statistics.mean(shot[col]) ]
+        #SD
+        df_output[col + '_SD'] = [ statistics.stdev(shot[col]) ]
 
-        #for eyes:
-        values = list(temp[colSets['eyes']])
-        eyes['max'].append(max(values)) #append max value from the row
-        eyes['mean'].append(statistics.mean(values)) #append mean of the row
-        eyes['der'].append((eyes_prev - eyes['max'][i]) / (temp['timestamp'] - time_prev)) #append velocity of the row
+   
+    return df_output
 
-        #for mouth: 
-        values = list(temp[colSets['mouth']])
-        mouth['max'].append(max(values)) #append max value from the row
-        mouth['mean'].append(statistics.mean(values)) #append mean of the row
-        mouth['der'].append((mouth_prev - mouth['max'][i]) / (temp['timestamp'] - time_prev)) #append velocity of the row
-
-        #for all AUs:
-        values = list(temp[colSets['eyes'] + colSets['mouth']])
-        AU['max'].append(max(values)) #append max value from the row
-        AU['mean'].append(statistics.mean(values)) #append mean of the row
-        AU['der'].append((AU_prev - AU['max'][i]) / (temp['timestamp'] - time_prev)) #append velocity of the row
-
-    facial_act['face_id'].append(id)
-
-    #for MAX values
-    facial_act['mean_eyes(max)'].append(statistics.mean(eyes['max']))
-    facial_act['SD_eyes(max)'].append(statistics.stdev(eyes['max']))
-    facial_act['mean_mouth(max)'].append(statistics.mean(mouth['max']))
-    facial_act['SD_mouth(max)'].append(statistics.stdev(mouth['max']))
-    facial_act['mean_AU_r(max)'].append(statistics.mean(AU['max']))
-    facial_act['SD_AU_r(max)'].append(statistics.stdev(AU['max']))
-
-    #for derivativity (MAX values in a row)
-    facial_act['mean_eyes(der)'].append(statistics.mean(eyes['der']))
-    facial_act['SD_eyes(der)'].append(statistics.stdev(eyes['der']))
-    facial_act['mean_mouth(der)'].append(statistics.mean(mouth['der']))
-    facial_act['SD_mouth(der)'].append(statistics.stdev(mouth['der']))
-    facial_act['mean_AU_r(der)'].append(statistics.mean(AU['der']))
-    facial_act['SD_AU_r(der)'].append(statistics.stdev(AU['der']))
-
-    #for average values
-    facial_act['mean_eyes(average)'].append(statistics.mean(eyes['mean']))
-    facial_act['SD_eyes(average)'].append(statistics.stdev(eyes['mean']))
-    facial_act['mean_mouth(average)'].append(statistics.mean(mouth['mean']))
-    facial_act['SD_mouth(average)'].append(statistics.stdev(mouth['mean']))
-    facial_act['mean_AU_r(average)'].append(statistics.mean(AU['mean']))
-    facial_act['SD_AU_r(average)'].append(statistics.stdev(AU['mean']))
-
-    #for blink
-    blink = list(shot['AU45_r'])
-    facial_act['mean_blink'].append(statistics.mean(blink))
-    facial_act['SD_blink'].append(statistics.stdev(blink))
-
-
-    return facial_act
 
 
 
 
 #this function calculates the mean and SD for the whole frame with multiple shots
 # input: dataframe
-#output: facial act: a dictionary in a format: facial_act = {'face_id':[], 'mean_eyes(max)':[], 'SD_eyes(max)':[], 'mean_mouth(max)':[], 'SD_mouth(max)':[], 'mean_AU_r(max)':[], 'SD_AU_r(max)':[],
-                #'mean_eyes(average)':[], 'SD_eyes(average)':[], 'mean_mouth(average)':[], 'SD_mouth(average)':[], 'mean_AU_r(average)':[], 'SD_AU_r(average)':[],
-                 #   'mean_blink':[], 'SD_blink':[]}
+#output: facial act: a pandas dataframe with statistics for the whole movie 
                  
-def stat(df):
+def stat(df, movie, value='max', colSets=COLSETS):
     shots = list(df.face_id.unique()) #find unique face_ids in a dataframe
 
-    facial_act = {'face_id':[], 'mean_eyes(max)':[], 'SD_eyes(max)':[], 'mean_mouth(max)':[], 'SD_mouth(max)':[], 'mean_AU_r(max)':[], 'SD_AU_r(max)':[],
-                'mean_eyes(der)':[], 'SD_eyes(der)':[], 'mean_mouth(der)':[], 'SD_mouth(der)':[], 'mean_AU_r(der)':[], 'SD_AU_r(der)':[],
-                'mean_eyes(average)':[], 'SD_eyes(average)':[], 'mean_mouth(average)':[], 'SD_mouth(average)':[], 'mean_AU_r(average)':[], 'SD_AU_r(average)':[],
-                    'mean_blink':[], 'SD_blink':[]}
+    #extract max values for each sets of AU
+    if value == 'max':
+        df['eyes'] = df[colSets['eyes']].max(axis=1)
+        df['midpart'] = df[colSets['midpart']].max(axis=1)
+        df['mouth'] = df[colSets['mouth']].max(axis=1)
+    
+    if value == 'sum':
+        df['eyes'] = df[colSets['eyes']].sum(axis=1)
+        df['midpart'] = df[colSets['midpart']].sum(axis=1)
+        df['mouth'] = df[colSets['mouth']].sum(axis=1)
+
+    if value == 'avg':
+        df['eyes'] = (df[colSets['eyes']].sum(axis=1))/len(COLSETS['eyes'])
+        df['midpart'] = (df[colSets['midpart']].sum(axis=1))/len(COLSETS['midpart'])
+        df['mouth'] = (df[colSets['mouth']].sum(axis=1))/len(COLSETS['mouth'])
+
+
+    #extract velocity for each sets of AU
+    df['eyes_d'] = df['eyes'].diff()
+    df['midpart_d'] = df['midpart'].diff()
+    df['mouth_d'] = df['mouth'].diff()
+
+    stat_cols = list(df.columns[-6:])
+
+
+    output = pd.DataFrame(columns=['movie', 'face_id', 'time', 'eyes_mean', 'eyes_SD', 'midpart_mean', 'midpart_SD',
+    'mouth_mean', 'mouth_SD', 'eyes_d_mean', 'eyes_d_SD', 'midpart_d_mean', 'midpart_d_SD', 'mouth_d_mean', 'mouth_d_SD'])
+
     
     for id in shots:
         shot = df[df['face_id'] == id] #select rows with a particular face_id
+        #if 'Bright' in movie and id == 74.0: #костыль
+            #continue
 
-        facial_act = mean_SD(shot, id, facial_act)
+        output = pd.concat([output, mean_SD(shot, movie, id, stat_cols)], ignore_index=True)
     
-    return facial_act
+
+
+    return output
+
+
+
+
+
+
+
+####################   FILTER #####################
+
+#input: au - a list of AU values; frac: SD will be divided by sqrt(frac); deg = degree of a polynom
+def smooth_au(au, frac=4, deg=3):
+
+    t = len(au)
+    w = deg + 2 #window length has to be more than a polynom degree
+
+    SD = statistics.stdev(au)
+    stdev = SD/math.sqrt(frac)
+    #stdev = SD/2
+
+    #look for the best window; step=2; w has to be odd
+    while w < t:
+        smoothed = savgol_filter(au, w, deg)
+
+        sum = 0
+        for i in range(t):
+            sum += abs(au[i] - smoothed[i])
+
+        if sum/t > stdev: #interrupt a cycle 
+            break
+
+        w += 2
+
+    #show output plot
+
+    #plt.plot(au, color='b', label='AU')
+    #plt.plot(smoothed, color='r', label='smoothed')
+    #plt.show()
+    #print('orig_mean:', statistics.mean(au), 'smooth_mean:', statistics.mean(smoothed))
+
+    return smoothed
+
+
+
+#filter all AUs using Savitsky-Golay filter with polynom degree=3
+def normalize(df):
+    shots = df.face_id.unique() #find unique face_ids
+    for id in shots:
+        for AU in COLSETS['all']:
+            au = list(df[df['face_id'] == id][AU])
+            minim = min(au)
+            maxim = max(au)
+
+            if maxim == 0: #for cases when no emotions are shown
+                #print(id, AU, maxim)
+                continue
+            #normalize data
+            for i in range(len(au)):
+                au[i] = (au[i] - minim) / (maxim - minim)
+            
+            df.loc[df['face_id'] == id, AU] = au
+    
+    return df    
+
+
+
+#filter all AUs using Savitsky-Golay filter with polynom degree=3
+def sg_filter(df, frac=4):
+    shots = df.face_id.unique() #find unique face_ids
+    for id in shots:
+        for AU in COLSETS['all']:
+            au = list(df[df['face_id'] == id][AU])
+            upd_au = smooth_au(au, frac, deg=3)
+            df.loc[df['face_id'] == id, AU] = upd_au
+    
+    return df   
+
+
+
+
+
+
+
+
+#return selected rows for all HM and AM movies
+def hm_am(file):
+    HM = ['MonsterInLaw', 'QuantumOfSolace', 'Click', 'PiratesOfCaribbean', 'TheDarkKnight', 'FastAndFurious']
+    AM = ['Clean', 'Synecdoche', 'BrightStar', 'CertifiedCopy', 'Spider', 'AllOrNothing']
+
+    COLS=['movie', 'face_id', 'time', 'eyes_mean', 'eyes_SD', 'midpart_mean', 'midpart_SD',
+    'mouth_mean', 'mouth_SD', 'eyes_d_mean', 'eyes_d_SD', 'midpart_d_mean', 'midpart_d_SD', 'mouth_d_mean', 'mouth_d_SD']
+
+    df = pd.read_csv(file, sep=',')
+
+    
+    #dset for Hollywood movies
+    outputHM = pd.DataFrame(columns=COLS)
+    for i in HM:
+        outputHM = pd.concat([outputHM, df[df['movie'] == i]]) #select rows with a particular face_id
+
+    #dset for Art movies
+    outputAM = pd.DataFrame(columns=COLS)
+    for i in AM:
+        outputAM = pd.concat([outputAM, df[df['movie'] == i]]) #select rows with a particular face_id
+    
+    
+    return outputHM, outputAM
+
+
+
+def ttest():
+    ttest_ind(data_group1, data_group2, equal_var=True/False)
+
+
+
+#plots the graphs of given AUs
+#input: df - shot, cols - columns of interest
+def plot(df, cols):
+    
+    au_vectors = {}
+    au_array = []
+    color = cycle('bgrcmk')
+
+    for au in cols:
+        au_vectors[au] = list(df[au])
+        au_array.append(au_vectors[au])
+
+    for vec in au_vectors:
+        plt.plot(au_vectors[vec], color=next(color), label=vec)
+        plt.legend(au_vectors)
+    plt.show()
+
+
+    au_array = np.array(au_array)
+    vector_sum = au_array.sum(axis=0)
+
+
+    plt.plot(vector_sum, color=next(color), label=vec)
+    plt.legend('sum')
+    plt.show()
